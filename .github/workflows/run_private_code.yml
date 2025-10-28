@@ -1,7 +1,11 @@
 name: run-private-code
 
 on:
-  
+  schedule:
+    # 12:00 Asia/Bangkok (UTC+7) → 05:00 UTC
+    - cron: "0 0 * * *"
+    # 18:00 Asia/Bangkok (UTC+7) → 11:00 UTC
+    - cron: "0 10 * * *"
   workflow_dispatch: {}
 
 
@@ -19,9 +23,7 @@ jobs:
       YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-      WHISPER_MODEL: base
-      WHISPER_LANG: vi
-      WHISPER_COMPUTE_TYPE: int8
+      
 
     steps:
       - name: Checkout wrapper (repo PUBLIC)
@@ -48,7 +50,7 @@ jobs:
       - name: Resolve parameters (support schedule without inputs)
         id: params
         run: |
-          repo="${{ inputs.private_repo }}"; [ -z "$repo" ] && repo="colfleshjadein2404997-oss/tesst-mc"; echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          repo="${{ inputs.private_repo }}"; [ -z "$repo" ] && repo="dellxob29aet-alt/rieng-tu"; echo "repo=$repo" >> "$GITHUB_OUTPUT"
           ref="${{ inputs.private_ref }}";   [ -z "$ref" ] && ref="main";                                           echo "ref=$ref"   >> "$GITHUB_OUTPUT"
           wd="${{ inputs.workdir }}";        [ -z "$wd" ]  && wd=".";                                               echo "workdir=$wd" >> "$GITHUB_OUTPUT"
           privacy="${{ inputs.youtube_privacy }}"; [ -z "$privacy" ] && privacy="public";                           echo "privacy=$privacy" >> "$GITHUB_OUTPUT"
@@ -141,41 +143,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-      - name: Install Python libs
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install packaging==24.2 pillow opencv-python-headless numpy gdown imageio-ffmpeg
-          # Thư viện Google API (upload YouTube nếu dùng)
-          python -m pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
-
-        # Caching model cho lần sau nhanh hơn (tùy chọn)
-        - name: Cache Whisper/HF models
-          uses: actions/cache@v4
-          with:
-            path: |
-              ~/.cache/huggingface
-              ~/.cache/whisper
-            key: ${{ runner.os }}-whisper-${{ env.WHISPER_MODEL || 'base' }}
-
-        # Cài ffmpeg + faster-whisper
-        - name: Install ffmpeg & faster-whisper
-          run: |
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg fonts-dejavu-core
-            python -m pip install --upgrade pip wheel
-            pip install "faster-whisper==1.*" "huggingface-hub>=0.23"
-            python - <<'PY'
-        import importlib, sys
-        importlib.import_module("faster_whisper")
-        print("[CHECK] faster_whisper OK", file=sys.stderr)
-        PY
-      
-        - name: (Optional) Install whisper CLI fallback
-          run: |
-            python -m pip install --upgrade pip wheel
-            pip install --index-url https://download.pytorch.org/whl/cpu torch
-            pip install "openai-whisper>=20231117"
-            whisper --help > /dev/null
 
       - name: Cache pip
         uses: actions/cache@v4

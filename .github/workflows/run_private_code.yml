@@ -19,24 +19,7 @@ jobs:
       YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-      SUB_AUTOGEN: "1"              # Tự tạo SRT từ audio nếu chưa có subs.srt
-      WHISPER_MODEL: tiny     # hoặc large-v3 nếu runner đủ mạnh
-      WHISPER_DEVICE: cpu       # hoặc cuda
-      WHISPER_COMPUTE_TYPE: int8
-      WHISPER_LANGUAGE: vi
-      SUB_FONT: BeVietnamPro-ExtraBold
-      SUB_FONTS_DIR: ./fonts
-      SUB_SIZE: "48"
-      SUB_MARGIN_V: "40"
-      SUB_OUTLINE: "3"
-      SUB_ALIGNMENT: "2"            # bottom-center
-      SUB_COLOR_ACTIVE: "&H00FFFF00"    # vàng đang nói
-      SUB_COLOR_INACTIVE: "&H00FFFFFF"  # trắng chưa nói
-
-      # VAD (tách im lặng) – có thể giữ mặc định
-      VAD_SILENCE_DB: "-35"
-      VAD_SILENCE_MIN: "0.35"
-      VAD_MAX_SEG_SEC: "12.0"
+      
 
     steps:
       - name: Checkout wrapper (repo PUBLIC)
@@ -152,19 +135,10 @@ jobs:
         with:
           python-version: '3.11'
 
-
       - name: Install system deps (ffmpeg)
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-
-      - name: Install deps (Whisper + FFmpeg)
-        run: |
-          python -m pip install --upgrade pip
-          pip install --upgrade faster-whisper packaging
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -173,11 +147,6 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('private-src/**/requirements*.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-            
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install --upgrade packaging
 
       - name: Install Python deps
         run: |

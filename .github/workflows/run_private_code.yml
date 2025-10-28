@@ -19,7 +19,9 @@ jobs:
       YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-      
+      WHISPER_MODEL: base
+      WHISPER_LANG: vi
+      WHISPER_COMPUTE_TYPE: int8
 
     steps:
       - name: Checkout wrapper (repo PUBLIC)
@@ -139,6 +141,37 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
+      - name: Install Python libs
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install packaging==24.2 pillow opencv-python-headless numpy gdown imageio-ffmpeg
+          # Thư viện Google API (upload YouTube nếu dùng)
+          python -m pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
+      - name: Cache Whisper/HF models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/huggingface
+            ~/.cache/whisper
+          key: ${{ runner.os }}-whisper-${{ env.WHISPER_MODEL }}
+
+      - name: Install ffmpeg & faster-whisper
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip wheel
+          pip install "faster-whisper==1.*" "huggingface-hub>=0.23"
+          python - <<'PY'
+    import importlib, sys
+    importlib.import_module("faster_whisper")
+    print("[CHECK] faster_whisper OK", file=sys.stderr)
+    PY
+        - name: (Optional) Install whisper CLI fallback
+          run: |
+            python -m pip install --upgrade pip wheel
+            pip install --index-url https://download.pytorch.org/whl/cpu torch
+            pip install "openai-whisper>=20231117"
+            whisper --help > /dev/null
 
       - name: Cache pip
         uses: actions/cache@v4

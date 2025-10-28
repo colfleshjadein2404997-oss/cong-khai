@@ -20,7 +20,7 @@ jobs:
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-2.5-flash
+      GEMINI_MODEL: gemini-1.5-flash
       SUB_AUTOGEN: "1"              # Tự tạo SRT từ audio nếu chưa có subs.srt
       SUB_FONT: BeVietnamPro-ExtraBold
       SUB_FONTS_DIR: ./fonts

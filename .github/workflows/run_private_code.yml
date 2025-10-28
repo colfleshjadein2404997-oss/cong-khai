@@ -20,6 +20,10 @@ jobs:
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
       SUB_AUTOGEN: "1"              # Tự tạo SRT từ audio nếu chưa có subs.srt
+      WHISPER_MODEL: tiny     # hoặc large-v3 nếu runner đủ mạnh
+      WHISPER_DEVICE: cpu       # hoặc cuda
+      WHISPER_COMPUTE_TYPE: int8
+      WHISPER_LANGUAGE: vi
       SUB_FONT: BeVietnamPro-ExtraBold
       SUB_FONTS_DIR: ./fonts
       SUB_SIZE: "48"

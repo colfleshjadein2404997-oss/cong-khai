@@ -198,7 +198,7 @@ jobs:
           [ -z "$TOKEN" ] && { echo "::warning::Không có token có quyền ghi. Bỏ qua commit."; exit 0; }
 
           FILES=""
-          for f in links_done.csv promptdalay.csv tieudedalay.csv tieudethumbdalay.csv; do
+          for f in links_done.csv promptdalay.csv tieudedalay.csv promptthumbdalay.cvs tieudethumbdalay.csv; do
             [ -f "$f" ] && FILES="$FILES $f"
             [ -n "$DIR_FOUND" ] && [ -f "$DIR_FOUND/$f" ] && FILES="$FILES $DIR_FOUND/$f"
           done
@@ -237,7 +237,7 @@ jobs:
           printf "Host github.com\n  StrictHostKeyChecking accept-new\n" >> ~/.ssh/config
 
           FILES=""
-          for f in promptdalay.csv links_done.csv tieudedalay.csv tieudethumbdalay.csv; do
+          for f in promptdalay.csv links_done.csv tieudedalay.csv promptthumbdalay.cvs tieudethumbdalay.csv; do
             [ -f "$f" ] && FILES="$FILES $f"
             [ -n "$DIR_FOUND" ] && [ -f "$DIR_FOUND/$f" ] && FILES="$FILES $DIR_FOUND/$f"
           done

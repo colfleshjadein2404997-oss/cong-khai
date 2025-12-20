@@ -20,6 +20,13 @@ jobs:
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
       
+      # ===== THÊM TỪ ĐÂY: cấu hình sub chuẩn hơn (faster-whisper) =====
+      WHISPER_MODEL: large-v3
+      WHISPER_LANGUAGE: vi
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      WHISPER_BEAM_SIZE: "5"
+      WHISPER_VAD: "1"
 
     steps:
       - name: Checkout wrapper (repo PUBLIC)

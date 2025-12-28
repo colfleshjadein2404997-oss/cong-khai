@@ -136,10 +136,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install system deps (ffmpeg)
+      - name: Install system deps (ffmpeg + libsndfile)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg libsndfile1
+
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -160,6 +161,12 @@ jobs:
           # Whisper (gói đúng tên: openai-whisper)
           python -m pip install "openai-whisper==20231117"
           
+          # NEW: inaSpeechSegmenter (lọc nhạc / speech-music segmentation)
+          python -m pip install "inaSpeechSegmenter==0.8.0"
+
+          # (tuỳ chọn) test import cho chắc
+          python -c "from inaSpeechSegmenter import Segmenter; print('inaSpeechSegmenter OK')"
+
           # Kiểm tra import (dùng python -c để tránh lỗi YAML here-doc)
           python -c "import sys; import whisper, torch, torchaudio; print('Whisper/Torch OK:', whisper.__version__, torch.__version__)"
           

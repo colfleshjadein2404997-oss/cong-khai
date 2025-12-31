@@ -164,6 +164,9 @@ jobs:
           # NEW: inaSpeechSegmenter (lọc nhạc / speech-music segmentation)
           python -m pip install "inaSpeechSegmenter==0.8.0"
 
+          #loc banner qr
+          python -m pip install opencv-python-headless
+
           # (tuỳ chọn) test import cho chắc
           python -c "from inaSpeechSegmenter import Segmenter; print('inaSpeechSegmenter OK')"
 

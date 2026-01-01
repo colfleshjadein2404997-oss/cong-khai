@@ -28,7 +28,10 @@ jobs:
       CF_MODEL: "@cf/black-forest-labs/flux-1-schnell"
       CF_STEPS: "4"
 
-      POLL_TOKEN: ${{ secrets.POLL_TOKEN }}
+      POLLINATIONS_BASE: https://pollinations.ai/p
+      POLL_TOKEN: ${{ secrets.POLL_TOKEN }}  # chỉ nếu đây là secret key (không phải pk_)
+      POLL_REFERER: https://pollinations.ai/
+      POLL_ORIGIN: https://pollinations.ai
       
     steps:
       - name: Checkout wrapper (repo PUBLIC)

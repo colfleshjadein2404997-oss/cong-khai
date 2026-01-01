@@ -93,7 +93,7 @@ YT_REFRESH_TOKEN = os.getenv("YT_REFRESH_TOKEN", "")
 YOUTUBE_PRIVACY  = os.getenv("YOUTUBE_PRIVACY", "public")
 
 # Pollinations (bền)
-POLLINATIONS_BASE   = "https://image.pollinations.ai/prompt/"
+POLLINATIONS_BASE   = "https://gen.pollinations.ai/"
 POLLINATIONS_MODEL  = os.getenv("POLLINATIONS_MODEL", "flux")
 IMG_W, IMG_H        = 1920, 1080
 PER_IMAGE_SECONDS   = 180   # 3 phút/ảnh

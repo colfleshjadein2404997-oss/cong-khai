@@ -161,8 +161,6 @@ jobs:
           # Whisper (gói đúng tên: openai-whisper)
           python -m pip install "openai-whisper==20231117"
           
-          # NEW: inaSpeechSegmenter (lọc nhạc / speech-music segmentation)
-          python -m pip install "inaSpeechSegmenter==0.8.0"
 
           # loc banner qr
           python -m pip install opencv-python-headless

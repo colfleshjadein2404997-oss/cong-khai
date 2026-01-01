@@ -1,266 +1,1423 @@
-name: run-private-code
+# scripts/generate_thumbnails.py
+# 720p • Pollinations bền • Cache 720p FX • yuva420p overlay • SINGLE FX (theo thứ tự)
+import os, sys, pathlib, random, subprocess, shlex, shutil, io, hashlib, urllib.parse, time, csv, base64
+from pathlib import Path
+import math
+import re
+import concurrent.futures
+import threading
 
-on:
-  
+
+# ================== IMPORT BÊN THỨ BA ==================
+try:
+    from layouts import render
+    from PIL import Image, ImageDraw, ImageFilter
+    import gdown
+    import numpy as np
+    import requests
+except ImportError as e:
+    print(f"[ERROR] Thiếu thư viện: {e}. Hãy đảm bảo bước pip install trong workflow đã cài đủ.")
+    sys.exit(1)
+# === Whisper (tạo phụ đề SRT) ===
+try:
+    import whisper
+    from whisper.utils import get_writer as _whisper_writer
+except Exception:
+    whisper = None
+    _whisper_writer = None
+
+# === Whisper (tạo phụ đề SRT) ===
+try:
+    import whisper
+    from whisper.utils import get_writer as _whisper_writer
+except Exception:
+    whisper = None
+    _whisper_writer = None
+
+# --- cache model để khỏi load lại ---
+WHISPER_MODEL = None
+def get_whisper_model():
+    global WHISPER_MODEL
+    if WHISPER_MODEL is None:
+        model_name = os.getenv("WHISPER_MODEL", "base")  # đổi sang "small" nếu cần nhanh hơn
+        WHISPER_MODEL = whisper.load_model(model_name)
+    return WHISPER_MODEL
+
+
+# ================== ĐƯỜNG DẪN ==================
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+DESCRIPTION_FILE = ROOT / "description.txt"
+
+CSV_INPUT  = ROOT / "tieude.csv"
+CSV_DONE   = ROOT / "tieudedalay.csv"
+
+LINKS_CSV_INPUT = ROOT / "links.csv"
+LINKS_CSV_DONE  = ROOT / "links_done.csv"
+
+PROMPT_CSV_INPUT = ROOT / "prompt.csv"
+PROMPT_CSV_DONE  = ROOT / "promptdalay.csv"
+
+FINAL_OUT_DIR = ROOT / "final_output"
+TMP_DIR       = ROOT / ".tmp"
+
+HOST_DIR  = ROOT / "HOST"
+FX_DIR    = ROOT / "HIEUUNG"
+FX_RADIO  = FX_DIR / "radio.mp4"
+FX_CACHE_DIR = FX_DIR / "_cache720p"   # Cache FX 720p để bỏ scale mỗi khung
+THUMBS_DIR = ROOT / "thumbs"   # thư mục chứa sẵn thumbnail đã đánh số
+
+STATE_DIR = ROOT / ".state"
+STATE_DIR.mkdir(exist_ok=True)
+STATE_HOST = STATE_DIR / "host_index.txt"
+STATE_FX   = STATE_DIR / "fx_index.txt"
+# === Background state (xoay 25 tấm trong HOST/background1..25.jpg)
+STATE_BG        = STATE_DIR / "background_index.txt"
+N_BACKGROUNDS   = int(os.getenv("N_BACKGROUNDS", "25"))
+STATE_THUMB     = STATE_DIR / "thumb_index.txt"  # xoay thumbnail trong thumbs/
+STATE_TITLE     = STATE_DIR / "title_index.txt"  # xoay tiêu đề trong tieude.csv
+
+# ================== ENV & HẰNG ==================
+N_TITLES = int(os.getenv("N_TITLES", "1"))
+OUT_FPS  = int(os.getenv("OUT_FPS", "20"))   # giữ như code cũ
+BG_FPS   = OUT_FPS                           # đồng bộ nền
+OUT_W = int(os.getenv("OUT_W", "1280"))
+OUT_H = int(os.getenv("OUT_H", "720"))
+
+# Audio “nhanh” hay “đẹp” (tùy chọn)
+AUDIO_ENHANCE_FAST  = os.getenv("AUDIO_ENHANCE_FAST", "0") == "1"  # 1 = filter nhẹ, 0 = filter đầy đủ
+
+# YouTube (tùy chọn)
+YT_CLIENT_ID     = os.getenv("YT_CLIENT_ID", "")
+YT_CLIENT_SECRET = os.getenv("YT_CLIENT_SECRET", "")
+YT_REFRESH_TOKEN = os.getenv("YT_REFRESH_TOKEN", "")
+YOUTUBE_PRIVACY  = os.getenv("YOUTUBE_PRIVACY", "public")
+
+# Pollinations (bền)
+POLLINATIONS_BASE   = "https://image.pollinations.ai/prompt/"
+POLLINATIONS_MODEL  = os.getenv("POLLINATIONS_MODEL", "flux")
+IMG_W, IMG_H        = 1920, 1080
+PER_IMAGE_SECONDS   = 180   # 3 phút/ảnh
+
+POLL_REFERER     = os.getenv("POLL_REFERER", "https://pollinations.ai/")
+POLL_ORIGIN      = os.getenv("POLL_ORIGIN",  "https://pollinations.ai")
+POLL_ACCEPT_LANG = os.getenv("POLL_ACCEPT_LANG", "en-US,en;q=0.9")
+
+IMG_TIMEOUT_SEC      = int(os.getenv("IMG_TIMEOUT_SEC", "60"))
+TIMEOUT_CONNECT      = int(os.getenv("POLL_TIMEOUT_CONNECT", "15"))
+TIMEOUT_READ         = int(os.getenv("POLL_TIMEOUT_READ", "300"))
+MAX_TRIES_PER_PROMPT = int(os.getenv("POLL_MAX_TRIES_PER_PROMPT", "10"))
+
+POLL_SEED_MODE  = os.getenv("POLL_SEED_MODE", "random_per_image").lower()  # fixed|random_per_image
+POLL_FIXED_SEED = int(os.getenv("POLL_FIXED_SEED", "0"))
+POLL_MODEL_FALLBACKS = [m.strip() for m in os.getenv("POLL_MODEL_FALLBACKS", "").split(",") if m.strip()]
+
+IMG_RATE_SEC     = float(os.getenv("IMG_RATE_SEC", "2"))
+POLL_BACKOFF_MAX = 10
+ALLOW_PLACEHOLDER = os.getenv("ALLOW_PLACEHOLDER", "1") not in ("0","false","False")
+
+# AI Horde fallback (không cần key)
+HORDE_BASE = os.getenv("HORDE_BASE", "https://aihorde.net")
+HORDE_API_KEY = os.getenv("HORDE_API_KEY", "0000000000")
+HORDE_POLL_SEC = float(os.getenv("HORDE_POLL_SEC", "5"))
+HORDE_MAX_WAIT_SEC = int(os.getenv("HORDE_MAX_WAIT_SEC", "420"))
+HORDE_CLIENT_AGENT = os.getenv("HORDE_CLIENT_AGENT", "autoslideaudio:1.0:contact@localhost")
+
+# requests Session + Retry + headers như trình duyệt
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+_session = requests.Session()
+_retry = Retry(
+    total=3, connect=3, read=3,
+    status_forcelist=(502, 503, 504),
+    allowed_methods=frozenset(["GET"]),
+    backoff_factor=0.6, raise_on_status=False
+)
+_session.mount("https://", HTTPAdapter(max_retries=_retry, pool_maxsize=32))
+_session.mount("http://",  HTTPAdapter(max_retries=_retry, pool_maxsize=32))
+_REQ_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/125.0.0.0 Safari/537.36"),
+    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    "Accept-Language": POLL_ACCEPT_LANG,
+    "Referer": POLL_REFERER,
+    "Origin": POLL_ORIGIN,
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "no-cors",
+    "Sec-Fetch-Dest": "image",
+}
+_last_img_ts = 0.0
+def _respect_rate_limit():
+    global _last_img_ts
+    now = time.monotonic()
+    delta = now - _last_img_ts
+    wait = IMG_RATE_SEC - delta
+    if wait > 0:
+        time.sleep(wait)
+    _last_img_ts = time.monotonic()
+
+# ================== TIỆN ÍCH ==================
+def ensure_ffmpeg():
+    if shutil.which("ffmpeg"): return
+    try:
+        import imageio_ffmpeg
+        ff = imageio_ffmpeg.get_ffmpeg_exe()
+        os.environ["PATH"] = str(pathlib.Path(ff).parent) + os.pathsep + os.environ.get("PATH","")
+        if shutil.which("ffmpeg"):
+            print(f"[INFO] ffmpeg dùng từ imageio-ffmpeg: {ff}")
+            return
+    except Exception:
+        pass
+    if shutil.which("sudo"):
+        try:
+            print("[INFO] Cài ffmpeg qua apt-get...")
+            subprocess.run(["sudo","apt-get","update"], check=True)
+            subprocess.run(["sudo","apt-get","install","-y","ffmpeg"], check=True)
+            return
+        except Exception as e:
+            print(f"[WARN] Cài ffmpeg thất bại: {e}")
+    print("[ERROR] Không tìm thấy ffmpeg.")
+    sys.exit(1)
+
+def read_lines(p: pathlib.Path):
+    if not p.exists(): return []
+    with p.open("r", encoding="utf-8-sig", newline="") as f:
+        return [line.strip() for line in f if line.strip()]
+
+def append_lines(p: pathlib.Path, lines):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8", newline="") as f:
+        for line in lines: f.write(line + "\n")
+
+def sanitize_for_path(name: str) -> str:
+    for ch in ['"',':','<','>','|','*','?','\r','\n','/']: name = name.replace(ch," ")
+    return name.strip() or "video"
+
+def next_index(path: pathlib.Path, total: int, step: int = 1, start: int = 1) -> int:
+    idx = start
+    if path.exists():
+        try: idx = int(path.read_text().strip())
+        except Exception: idx = start
+    current = idx
+    nxt = current + step
+    while nxt > total:
+        nxt = nxt - total + (start - 1)
+    path.write_text(str(nxt))
+    return current
+
+def pick_host_path():
+    """
+    Chọn ảnh HOST theo thứ tự file trong thư mục HOST:
+
+    - Ưu tiên file bắt đầu bằng 'person' (person1.png, person2.png, ...).
+    - Mỗi *workflow run* trên GitHub sẽ chọn 1 host khác nhau dựa trên GITHUB_RUN_NUMBER.
+    - Nếu chạy local (không có GITHUB_RUN_NUMBER) thì chọn ngẫu nhiên.
+    """
+    if not HOST_DIR.exists():
+        print(f"[WARN] Thư mục HOST không tồn tại: {HOST_DIR}")
+        return None
+
+    # Ưu tiên các file có prefix 'person'
+    host_files = sorted(HOST_DIR.glob("person*"))
+    if not host_files:
+        # fallback: lấy tất cả file ảnh
+        host_files = sorted(
+            list(HOST_DIR.glob("*.png")) +
+            list(HOST_DIR.glob("*.jpg")) +
+            list(HOST_DIR.glob("*.jpeg"))
+        )
+
+    if not host_files:
+        print(f"[WARN] Không tìm thấy ảnh host nào trong {HOST_DIR}")
+        return None
+
+    # --- TÍNH CHỈ SỐ HOST ---
+    run_str = os.getenv("GITHUB_RUN_NUMBER")  # GitHub Actions
+    idx = None
+
+    if run_str is not None:
+        try:
+            run_num = int(run_str)
+        except ValueError:
+            run_num = 1
+        # quay vòng theo số host thực tế
+        idx = (run_num - 1) % len(host_files)
+    else:
+        # chạy local: chọn ngẫu nhiên cho đỡ chán
+        idx = random.randrange(len(host_files))
+
+    host_path = host_files[idx]
+    print(f"[HOST] Chọn host {idx+1}/{len(host_files)}: {host_path.name}")
+    return host_path
+
+def _get_seq_index(total: int, state_file: Path | None = None) -> int:
+    """
+    Tính index 1..total theo 2 chế độ:
+    - Nếu có GITHUB_RUN_NUMBER (GitHub Actions): dùng run_number để quay vòng.
+    - Nếu không có (chạy local): dùng file state (next_index) để nhớ lần trước.
+    """
+    run_str = os.getenv("GITHUB_RUN_NUMBER")
+    if run_str:
+        try:
+            run_num = int(run_str)
+        except ValueError:
+            run_num = 1
+        # run 1 -> 1, run 2 -> 2, ..., run N -> (N-1)%total + 1
+        return ((run_num - 1) % total) + 1
+
+    # Chạy local: fallback sang file state
+    if state_file is None:
+        return 1
+    return next_index(state_file, total, step=1, start=1)
+
+def pick_thumb_path() -> Path | None:
+    """
+    Chọn thumbnail có sẵn trong thư mục 'thumbs' theo thứ tự:
+    thumb1, thumb2, thumb3, ... (kèm đuôi .jpg/.jpeg/.png)
+    Hết danh sách thì quay lại từ đầu (dùng STATE_THUMB).
+    """
+    if not THUMBS_DIR.exists():
+        print(f"[WARN] Thư mục thumbs không tồn tại: {THUMBS_DIR}")
+        return None
+
+    files: list[Path] = []
+    # Chỉ lấy file có prefix 'thumb'
+    for ext in ("jpg", "jpeg", "png"):
+        files.extend(THUMBS_DIR.glob(f"thumb*.{ext}"))
+
+    if not files:
+        print(f"[WARN] Không tìm thấy file thumbnail dạng 'thumb*.jpg/png' trong {THUMBS_DIR}")
+        return None
+
+    # sort tự nhiên theo số phía sau 'thumb', ví dụ: thumb1, thumb2, thumb10,...
+    def _natkey(p: Path):
+        s = p.stem  # vd: 'thumb12'
+        # tách chuỗi thành ['thumb', '12', ''] → số sẽ được convert sang int
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
+
+    files = sorted(files, key=_natkey)
+    total = len(files)
+
+    # Dùng run_number nếu có (GitHub), nếu không thì .state
+    idx = _get_seq_index(total, STATE_THUMB)
+    chosen = files[(idx - 1) % total]
+    print(f"[THUMB] Chọn thumbnail {idx}/{total}: {chosen.name}")
+    return chosen
+
     
-  workflow_dispatch: {}
+def pick_title_in_order() -> str | None:
+    """
+    Lấy 1 tiêu đề trong tieude.csv theo thứ tự dòng:
+    dòng 1, dòng 2, dòng 3, ... hết thì quay lại dòng 1.
+    Dùng STATE_TITLE để nhớ lần trước đã dừng ở đâu.
+    """
+    titles = read_lines(CSV_INPUT)
+    if not titles:
+        print(f"[WARN] tieude.csv trống hoặc không tồn tại: {CSV_INPUT}")
+        return None
+
+    total = len(titles)
+
+    # Dùng run_number nếu có (GitHub), nếu không thì .state
+    idx = _get_seq_index(total, STATE_TITLE)
+
+    title = titles[(idx - 1) % total]
+    print(f"[TITLE] Chọn tiêu đề {idx}/{total}: {title}")
+    return title
 
 
-jobs:
-  run-private:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    concurrency:
-      group: run-private-${{ github.ref }}
-      cancel-in-progress: false
+# ================== AUDIO ==================
+def download_gdrive_audio(url: str, out_dir: Path) -> Path | None:
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    env:
-      # Secrets YouTube (đặt ở repo CÔNG KHAI)
-      YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
-      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-      
+    # luôn lưu thành .m4a vì file gốc trên Drive là m4a
+    tmp_out = out_dir / f"audio_{int(time.time())}.m4a"
 
-    steps:
-      - name: Checkout wrapper (repo PUBLIC)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
+    try:
+        real_path = gdown.download(url, output=str(tmp_out), fuzzy=True)
+        if real_path:
+            p = Path(real_path)
+            print(f"[OK] Đã tải audio: {p}")
+            return p
+    except Exception as e:
+        print(f"[ERROR] Tải audio thất bại: {e}")
 
-      # Quyết định mode auth (không dùng secrets trực tiếp trong if)
-      - name: Determine auth mode
-        id: auth
-        env:
-          HAS_PAT: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          HAS_SSH: ${{ secrets.PRIVATE_SSH_KEY }}
-        run: |
-          if [ -n "$HAS_PAT" ]; then
-            echo "mode=pat" >> "$GITHUB_OUTPUT"
-          elif [ -n "$HAS_SSH" ]; then
-            echo "mode=ssh" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=none" >> "$GITHUB_OUTPUT"
-          fi
-
-      # >>> FIX LỖI INPUTS KHI CHẠY THEO LỊCH <<<
-      - name: Resolve parameters (support schedule without inputs)
-        id: params
-        run: |
-          repo="${{ inputs.private_repo }}"; [ -z "$repo" ] && repo="colfleshjadein2404997-oss/tesst-mc"; echo "repo=$repo" >> "$GITHUB_OUTPUT"
-          ref="${{ inputs.private_ref }}";   [ -z "$ref" ] && ref="main";                                           echo "ref=$ref"   >> "$GITHUB_OUTPUT"
-          wd="${{ inputs.workdir }}";        [ -z "$wd" ]  && wd=".";                                               echo "workdir=$wd" >> "$GITHUB_OUTPUT"
-          privacy="${{ inputs.youtube_privacy }}"; [ -z "$privacy" ] && privacy="public";                           echo "privacy=$privacy" >> "$GITHUB_OUTPUT"
-
-      - name: Export resolved privacy to env
-        run: echo "YOUTUBE_PRIVACY=${{ steps.params.outputs.privacy }}" >> "$GITHUB_ENV"
+    return None
 
 
-      # KÉO CODE từ repo PRIVATE (PAT)
-      - name: Checkout PRIVATE via PAT
-        if: ${{ steps.auth.outputs.mode == 'pat' }}
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ steps.params.outputs.repo }}
-          ref: ${{ steps.params.outputs.ref }}
-          path: private-src
-          fetch-depth: 1
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          persist-credentials: false
+def pick_unused_link():
+    all_links = read_lines(LINKS_CSV_INPUT)
+    done_links = set(read_lines(LINKS_CSV_DONE))
+    for link in all_links:
+        if link not in done_links: return link
+    return None
 
-      # KÉO CODE từ repo PRIVATE (SSH)
-      - name: Checkout PRIVATE via SSH Deploy Key
-        if: ${{ steps.auth.outputs.mode == 'ssh' }}
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ steps.params.outputs.repo }}
-          ref: ${{ steps.params.outputs.ref }}
-          path: private-src
-          fetch-depth: 1
-          ssh-key: ${{ secrets.PRIVATE_SSH_KEY }}
-          persist-credentials: false
+def _probe_duration_seconds_with_ffmpeg(media_path: pathlib.Path) -> float:
+    try:
+        p = subprocess.run(["ffmpeg","-i",str(media_path)], capture_output=True, text=True)
+        txt = (p.stderr or "") + (p.stdout or "")
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", txt)
+        if not m: return -1.0
+        hh, mm, ss = int(m.group(1)), int(m.group(2)), float(m.group(3))
+        return hh*3600 + mm*60 + ss
+    except Exception:
+        return -1.0
 
-      - name: Fail if no auth available
-        if: ${{ steps.auth.outputs.mode == 'none' }}
-        run: |
-          echo "::error::Không checkout được repo private. Cần PRIVATE_REPO_TOKEN (PAT) hoặc PRIVATE_SSH_KEY (Deploy key)."
-          exit 1
+def trim_audio_if_long(audio_path: pathlib.Path,
+                       out_dir: pathlib.Path,
+                       threshold_sec: int = 43200,   # >12h thì coi là dài
+                       keep_sec: int = 41400) -> pathlib.Path:  # target ~11h30 (chỉ cắt ở bước enhance)
+    dur = _probe_duration_seconds_with_ffmpeg(audio_path)
+    if dur < 0:
+        print("[WARN] Không đọc được thời lượng audio -> bỏ qua cắt.")
+        return audio_path
 
-      - name: Verify PRIVATE checkout
-        working-directory: private-src
-        run: |
-          pwd && ls -la
-          echo "== 20 files in commit =="
-          git ls-tree -r --name-only HEAD | head -n 20
+    if dur <= threshold_sec:
+        print(f"[INFO] Audio {dur:.0f}s (<= 12h) -> bỏ qua cắt (giữ nguyên độ dài).")
+        return audio_path
 
-      # Tự tìm thư mục chứa scripts/generate_thumbnails.py (kể cả khi không nhập workdir)
-      - name: Detect script path
-        id: find_script
-        run: |
-          set -e
-          BASE="private-src"
-          DEFAULT="${{ steps.params.outputs.workdir }}"
-          CAND=""
-          if [ -n "$DEFAULT" ] && [ -f "$BASE/$DEFAULT/scripts/generate_thumbnails.py" ]; then
-            CAND="$BASE/$DEFAULT"
-          else
-            CAND=$(cd "$BASE" && find . -type f -path "*/scripts/generate_thumbnails.py" -print -quit | sed 's|^\./||' | xargs -I{} dirname {} )
-            [ -n "$CAND" ] && CAND="$BASE/$CAND"
-          fi
-          if [ -z "$CAND" ]; then
-            echo "::error::Không tìm thấy scripts/generate_thumbnails.py trong repo private."
-            exit 1
-          fi
-          echo "dir=$CAND" >> "$GITHUB_OUTPUT"
-          echo "[FOUND] $CAND"
+    # Không cắt ở đây để tránh tạo file .cut rất lớn; chỉ thông báo,
+    # việc cắt thực tế sẽ làm ở enhance_audio_for_speech.
+    print(
+        f"[INFO] Audio {dur:.0f}s (> 12h) -> sẽ cắt xuống còn ~{keep_sec} s "
+        f"(~11h30) ở bước enhance_audio_for_speech, không tạo file .cut riêng."
+    )
+    return audio_path
 
-      # Bắt buộc có secrets YT để up thẳng
-      - name: Require YT OAuth secrets
-        shell: bash
-        run: |
-          miss=0
-          for k in YT_CLIENT_ID YT_CLIENT_SECRET YT_REFRESH_TOKEN; do
-            if [ -z "${!k}" ]; then
-              echo "::error::Thiếu secret $k"
-              miss=1
-            fi
-          done
-          if [ "$miss" = "1" ]; then
-            exit 1
-          fi
-          echo "[OK] YT secrets đầy đủ."
+def mix_with_rain_bgm(audio_path: pathlib.Path, tmp_dir: pathlib.Path) -> pathlib.Path:
+    """
+    Trộn thêm tiếng mưa 'rain.*' trong thư mục ROOT/audio vào audio gốc.
+    - Lặp rain cho đủ độ dài audio gốc.
+    - Mix 2 track lại bằng ffmpeg.
+    - Trả về đường dẫn file audio mới (nếu thành công), nếu lỗi thì trả lại audio gốc.
+    """
+    audio_dir = ROOT / "audio"
+    rain_path = None
+
+    # tìm file rain với vài đuôi cơ bản
+    for ext in ("m4a", "wav", "mp3", "flac", "ogg"):
+        cand = audio_dir / f"rain.{ext}"
+        if cand.exists():
+            rain_path = cand
+            break
+
+    if not rain_path:
+        print(f"[WARN] Không tìm thấy audio mưa 'rain.*' trong {audio_dir} -> dùng audio gốc.")
+        return audio_path
+
+    dur = _probe_duration_seconds_with_ffmpeg(audio_path)
+    if dur <= 0:
+        print("[WARN] Không đo được thời lượng audio -> bỏ mix mưa.")
+        return audio_path
+
+    out = tmp_dir / (audio_path.stem + ".rain.m4a")
+
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(audio_path),              # [0] audio gốc
+        "-stream_loop", "-1", "-i", str(rain_path),  # [1] rain loop vô hạn
+        "-t", f"{dur:.3f}",                 # cắt cả 2 input về đúng độ dài audio gốc
+        "-filter_complex",
+        "[1:a]volume=0.35[rain];"           # tiếng mưa nhỏ hơn (25% âm lượng)
+        "[0:a][rain]amix=inputs=2:duration=first:dropout_transition=2",
+        "-c:a", "aac", "-b:a", "128k",
+        str(out),
+    ]
+
+    print("[CMD][rain]", " ".join(shlex.quote(c) for c in cmd))
+    try:
+        subprocess.run(cmd, check=True)
+        print(f"[OK] Đã mix tiếng mưa -> {out}")
+        return out
+    except subprocess.CalledProcessError:
+        print("[WARN] Mix tiếng mưa thất bại -> dùng audio gốc.")
+        return audio_path
+    
+def enhance_audio_for_speech(inp: Path, out_dir: Path) -> Path:
+    """
+    Làm sạch & tối ưu giọng đọc.
+    FAST=1: high/low-pass + resample (nhẹ CPU)
+    FAST=0: high/low-pass + afftdn + loudnorm + limiter + resample (đẹp hơn)
+    Xuất AAC mono 128k để dùng thẳng khi render.
+    CẮT LUÔN 11 TIẾNG 30 PHÚT Ở ĐÂY.
+    """
+    import subprocess, shlex
+
+    MAX_SEC = 41400  
+
+    out_dir.mkdir(exist_ok=True)
+    # đổi đuôi sang m4a vì ta xuất AAC
+    out = out_dir / (inp.stem + ".enh.m4a")
+
+    if AUDIO_ENHANCE_FAST:
+        # nhẹ: bỏ stereo, giữ 48k để aac dễ
+        af = "highpass=f=80,lowpass=f=12000,aresample=48000"
+    else:
+        af = (
+            "highpass=f=80,lowpass=f=12000,"
+            "afftdn=nr=12,"
+            "loudnorm=I=-16:LRA=11:TP=-1.5,"
+            "alimiter=limit=0.95,"
+            "aresample=48000"
+        )
+
+    cmd = [
+        "ffmpeg",
+        "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(inp),
+        "-t", str(MAX_SEC),          # cắt xuống đúng 9h tại đây
+        "-map_metadata", "-1",
+        "-vn",
+        "-af", af,
+        "-ac", "1",                  # MONO
+        "-c:a", "aac",               # Định dạng AAC
+        "-b:a", "128k",              # 128 kbps
+        "-ar", "48000",              # 48 kHz
+        str(out),
+    ]
+
+    print("[CMD]", " ".join(shlex.quote(c) for c in cmd))
+    try:
+        subprocess.run(cmd, check=True)
+        print(f"[OK] Enhance audio -> {out}")
+        return out
+    except subprocess.CalledProcessError:
+        print("[WARN] Enhance audio thất bại, dùng file gốc.")
+        return inp
 
 
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install system deps (ffmpeg + libsndfile)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg libsndfile1
 
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('private-src/**/requirements*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-      - name: Install Python libs
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          # Libs ảnh / video phụ trợ
-          python -m pip install pillow opencv-python-headless numpy gdown imageio-ffmpeg
-          # Google API (nếu upload YouTube)
-          python -m pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
-          # Torch CPU + Torchaudio (đúng index CPU)
-          python -m pip install "torch==2.3.1" "torchaudio==2.3.1" --index-url https://download.pytorch.org/whl/cpu
-          # Whisper (gói đúng tên: openai-whisper)
-          python -m pip install "openai-whisper==20231117"
-          
+def _ffmpeg_escape_path(p: Path) -> str:
+    s = str(p)
+    # Escape tối thiểu để dùng trong filter 'subtitles=' của ffmpeg
+    return (s.replace("\\", "\\\\")
+             .replace(":", "\\:")
+             .replace("'", "\\'")
+             .replace(",", "\\,"))
 
-          # loc banner qr
-          python -m pip install opencv-python-headless
+def transcribe_to_srt(audio_path: Path, out_dir: Path) -> Path:
+    """
+    Dùng Whisper → xuất .srt; sau đó FIX:
+    - Không chồng thời gian (no-overlap)
+    - Bẻ dòng thủ công tối đa 2 dòng/cue
+    - Lượng hoá thời gian theo FPS để khớp render (OUT_FPS)
+    """
+    if whisper is None or _whisper_writer is None:
+        raise RuntimeError("Thiếu 'openai-whisper'. Hãy cài trong workflow.")
 
-          # (tuỳ chọn) test import cho chắc
-          python -c "from inaSpeechSegmenter import Segmenter; print('inaSpeechSegmenter OK')"
+    import subprocess
 
-          # Kiểm tra import (dùng python -c để tránh lỗi YAML here-doc)
-          python -c "import sys; import whisper, torch, torchaudio; print('Whisper/Torch OK:', whisper.__version__, torch.__version__)"
-          
-      - name: Install Python deps
-        run: |
-          set -e
-          REQ=$(ls private-src/**/requirements*.txt 2>/dev/null | head -n1 || true)
-          if [ -n "$REQ" ]; then
-            echo "[INFO] Using requirements: $REQ"
-            pip install -r "$REQ"
-          else
-            echo "[INFO] No requirements*.txt found — install tối thiểu"
-            pip install Pillow opencv-python-headless numpy gdown \
-                        google-api-python-client google-auth google-auth-httplib2 \
-                        imageio-ffmpeg
-          fi
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-      # CHẠY CODE trong repo PRIVATE (upload YouTube trực tiếp)
-      - name: Run pipeline in PRIVATE
-        working-directory: ${{ steps.find_script.outputs.dir }}
-        run: |
-          set -e
-          python -u scripts/generate_thumbnails.py
+    # --- chỉ thêm đoạn này để giới hạn 1 giờ ---
+    tmp_1h = out_dir / "whisper_1h.m4a"
+    cut_cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", str(audio_path),
+        "-t", "18000",      # chỉ 5 giờ
+        "-ac", "1",        # mono cho nhẹ
+        "-ar", "16000",    # 16 kHz cho whisper
+        "-c:a", "aac",
+        "-b:a", "128k",
+        str(tmp_1h),
+    ]
+    subprocess.run(cut_cmd, check=True)
+    src_for_whisper = tmp_1h
+    # --- hết phần thêm ---
 
-      # Commit & PUSH 3 CSV về repo PRIVATE qua PAT (nếu checkout bằng PAT)
-      - name: Commit & push state CSVs back to PRIVATE (PAT)
-        if: ${{ steps.auth.outputs.mode == 'pat' }}
-        working-directory: private-src
-        env:
-          PUSH_TOKEN_1: ${{ secrets.PRIVATE_REPO_PUSH_TOKEN }}
-          PUSH_TOKEN_2: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          PRIVATE_REPO: ${{ steps.params.outputs.repo }}
-          PRIVATE_REF: ${{ steps.params.outputs.ref }}
-          DIR_FOUND: ${{ steps.find_script.outputs.dir }}
-        run: |
-          set -e
-          TOKEN="${PUSH_TOKEN_1:-$PUSH_TOKEN_2}"
-          [ -z "$TOKEN" ] && { echo "::warning::Không có token có quyền ghi. Bỏ qua commit."; exit 0; }
+    model = get_whisper_model()              # <<< dùng model cache
+    result = model.transcribe(str(src_for_whisper), fp16=False)
 
-          FILES=""
-          for f in links_done.csv promptdalay.csv tieudedalay.csv; do
-            [ -f "$f" ] && FILES="$FILES $f"
-            [ -n "$DIR_FOUND" ] && [ -f "$DIR_FOUND/$f" ] && FILES="$FILES $DIR_FOUND/$f"
-          done
-          [ -z "$FILES" ] && { echo "[INFO] Không có CSV để commit."; exit 0; }
+    # Xuất SRT nháp từ Whisper (để tận dụng chia câu có sẵn)
+    writer = _whisper_writer("srt", str(out_dir))
+    writer_opts = {"max_line_width": 35, "max_line_count": 2}
+    writer(result, str(src_for_whisper), writer_opts)
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${PRIVATE_REPO}.git"
+    # vẫn đặt tên SRT theo file gốc
+    srt_path = out_dir / (Path(audio_path).stem + ".srt")
+    if not srt_path.exists():
+        # whisper tạo theo tên file cắt → đổi tên lại
+        gen_path = out_dir / (src_for_whisper.stem + ".srt")
+        if gen_path.exists():
+            gen_path.rename(srt_path)
+        else:
+            raise RuntimeError("Whisper không tạo được SRT.")
 
-          CURBR=$(git rev-parse --abbrev-ref HEAD || true)
-          [ "$CURBR" = "HEAD" ] && git checkout -b ci-state-update
+    # Hậu xử lý để đảm bảo 2 dòng/cue và không overlap
+    _fix_srt_two_lines(
+        srt_path,
+        max_chars_per_line=25,
+        fps=float(OUT_FPS),
+        min_dur=0.90,     # tối thiểu 0.9s/cue để dễ đọc
+        min_gap=1.0/float(OUT_FPS)  # cách nhau ít nhất 1 frame
+    )
+    return srt_path
 
-          git add -- $FILES
-          git diff --cached --quiet && { echo "[INFO] Không có thay đổi."; exit 0; }
-          git commit -m "ci(state): update promptdalay.csv, links_done.csv, tieudedalay.csv"
-          git push origin HEAD:"${PRIVATE_REF}"
 
-      # Commit & PUSH 3 CSV về repo PRIVATE qua SSH (nếu checkout bằng SSH)
-      - name: Commit & push state CSVs back to PRIVATE (SSH)
-        if: ${{ steps.auth.outputs.mode == 'ssh' }}
-        working-directory: private-src
-        env:
-          PRIVATE_SSH_KEY: ${{ secrets.PRIVATE_SSH_KEY }}
-          PRIVATE_REPO: ${{ steps.params.outputs.repo }}
-          PRIVATE_REF: ${{ steps.params.outputs.ref }}
-          DIR_FOUND: ${{ steps.find_script.outputs.dir }}
-        run: |
-          set -e
-          [ -z "$PRIVATE_SSH_KEY" ] && { echo "::warning::Thiếu PRIVATE_SSH_KEY. Bỏ qua commit."; exit 0; }
+def _fmt_srt_time(t: float) -> str:
+    if t < 0: t = 0.0
+    h = int(t // 3600); t -= h*3600
+    m = int(t // 60);   t -= m*60
+    s = int(t); ms = int(round((t - s) * 1000))
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-          install -m 700 -d ~/.ssh
-          echo "$PRIVATE_SSH_KEY" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-          eval "$(ssh-agent -s)"
-          ssh-add ~/.ssh/id_deploy
-          printf "Host github.com\n  StrictHostKeyChecking accept-new\n" >> ~/.ssh/config
+def _parse_srt(path: Path):
+    cues = []
+    with path.open("r", encoding="utf-8-sig") as f:
+        lines = [l.rstrip("\n") for l in f]
+    i = 0
+    n = len(lines)
+    while i < n:
+        # bỏ số thứ tự
+        while i < n and not lines[i].strip():
+            i += 1
+        if i >= n: break
+        i += 1  # skip index line
 
-          FILES=""
-          for f in promptdalay.csv links_done.csv tieudedalay.csv; do
-            [ -f "$f" ] && FILES="$FILES $f"
-            [ -n "$DIR_FOUND" ] && [ -f "$DIR_FOUND/$f" ] && FILES="$FILES $DIR_FOUND/$f"
-          done
-          [ -z "$FILES" ] && { echo "[INFO] Không có CSV để commit."; exit 0; }
+        if i >= n: break
+        if "-->" not in lines[i]:
+            # lệch format: tìm dòng time
+            while i < n and "-->" not in lines[i]:
+                i += 1
+            if i >= n: break
+        time_line = lines[i]; i += 1
+        try:
+            ts, te = [p.strip() for p in time_line.split("-->")]
+        except ValueError:
+            continue
+        def _to_sec(s):
+            hh, mm, rest = s.split(":")
+            ss, ms = rest.split(",")
+            return int(hh)*3600 + int(mm)*60 + int(ss) + int(ms)/1000.0
+        start = _to_sec(ts); end = _to_sec(te)
 
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "git@github.com:${PRIVATE_REPO}.git"
+        txt_lines = []
+        while i < n and lines[i].strip():
+            txt_lines.append(lines[i])
+            i += 1
+        i += 1  # skip blank
+        text = "\n".join(txt_lines).strip()
+        cues.append({"start": start, "end": end, "text": text})
+    return cues
 
-          CURBR=$(git rev-parse --abbrev-ref HEAD || true)
-          [ "$CURBR" = "HEAD" ] && git checkout -b ci-state-update
+def _write_srt(cues, path: Path):
+    with path.open("w", encoding="utf-8") as f:
+        for idx, c in enumerate(cues, 1):
+            f.write(f"{idx}\n")
+            f.write(f"{_fmt_srt_time(c['start'])} --> {_fmt_srt_time(c['end'])}\n")
+            f.write(c["text"].rstrip() + "\n\n")
 
-          git add -- $FILES
-          git diff --cached --quiet && { echo "[INFO] Không có thay đổi."; exit 0; }
-          git commit -m "ci(state): update promptdalay.csv, links_done.csv, tieudedalay.csv"
-          git push origin HEAD:"${PRIVATE_REF}"
+def _wrap_two_lines(text: str, max_chars_per_line: int) -> str:
+    # Gom sạch khoảng trắng, bỏ dấu gạch đầu dòng dư
+    t = re.sub(r"\s+", " ", (text or "")).strip(" \u2013\u2014-")
+    if not t:
+        return ""
+    words = t.split()
+    line1, line2 = "", ""
+    for w in words:
+        if len(line1) + (1 if line1 else 0) + len(w) <= max_chars_per_line:
+            line1 = (line1 + " " + w).strip()
+        elif len(line2) + (1 if line2 else 0) + len(w) <= max_chars_per_line:
+            line2 = (line2 + " " + w).strip()
+        else:
+            # Nếu còn dư thì dồn vào line2 (có thể dài hơn một chút)
+            line2 = (line2 + " " + w).strip()
+    return (line1 + ("\n" + line2 if line2 else "")).strip()
+
+def _fix_srt_two_lines(path: Path,
+                       max_chars_per_line: int = 34,
+                       fps: float = 20.0,
+                       min_dur: float = 0.90,
+                       min_gap: float = 0.05):
+    cues = _parse_srt(path)
+    if not cues:
+        return
+    # Sắp xếp theo start
+    cues.sort(key=lambda x: (x["start"], x["end"]))
+
+    q = 1.0 / max(fps, 1.0)
+    new = []
+    prev_end = -1e9
+
+    for c in cues:
+        # Bẻ còn tối đa 2 dòng thủ công
+        text = _wrap_two_lines(c.get("text",""), max_chars_per_line=max_chars_per_line)
+
+        # Lượng hoá & chống chồng thời gian
+        start = c["start"]; end = c["end"]
+        # lượng hoá theo frame để khỏi lệch lẻ
+        start = round(start / q) * q
+        end   = round(end   / q) * q
+
+        # ép không overlap với cue trước
+        if start < prev_end + min_gap:
+            start = prev_end + min_gap
+
+        # đảm bảo tối thiểu min_dur
+        if end - start < min_dur:
+            end = start + min_dur
+
+        # trong trường hợp text rỗng, bỏ
+        if not text:
+            prev_end = max(prev_end, end)
+            continue
+
+        new.append({"start": start, "end": end, "text": text})
+        prev_end = end
+
+    # Ghi đè lại file SRT
+    _write_srt(new, path)
+
+
+# ================== POLLINATIONS & FALLBACK ==================
+def _slugify(text, max_len=60):
+    text = re.sub(r"\s+", " ", str(text)).strip().replace("/", "-")
+    text = re.sub(r"[^\w\-\s]", "", text, flags=re.UNICODE).strip().replace(" ","_")
+    if len(text) > max_len: text = text[:max_len].rstrip("_")
+    return text or "image"
+
+def _image_sha1_bytes(im: Image.Image, fmt="JPEG") -> bytes:
+    buf = io.BytesIO()
+    save_im = im.convert("RGB") if fmt == "JPEG" and im.mode != "RGB" else im
+    save_im.save(buf, fmt, quality=95, optimize=True)
+    return buf.getvalue()
+
+def _pollinations_candidate_urls(prompt: str, seed: int, model: str) -> list[str]:
+    q = urllib.parse.quote_plus(prompt)
+    base = POLLINATIONS_BASE.rstrip("/")
+    return [
+        # ƯU TIÊN 1920×1080 TRƯỚC
+        f"{base}/{q}?width=1920&height=1080&nologo=true&model={model}&seed={seed}",
+        f"{base}/{q}?width=1920&height=1080&nologo=true&seed={seed}",
+        # fallback xuống 1280 nếu 1920 lỗi
+        f"{base}/{q}?width=1280&height=720&nologo=true&model={model}&seed={seed}",
+        f"{base}/{q}?width=1280&height=720&nologo=true&seed={seed}",
+        # cuối cùng mới tới mấy dạng khác
+        f"{base}/{q}?aspect=16:9&nologo=true&seed={seed}",
+        f"{base}/{q}?width=960&height=540&nologo=true&seed={seed}",
+    ]
+
+
+def _make_local_placeholder(prompt: str, out_dir: Path, idx: int) -> Path:
+    W,H = IMG_W, IMG_H
+    h = hashlib.sha256((prompt or "").encode("utf-8")).hexdigest()
+    c1 = (int(h[0:2],16), int(h[2:4],16), int(h[4:6],16))
+    c2 = (int(h[6:8],16), int(h[8:10],16), int(h[10:12],16))
+    im = Image.new("RGB",(W,H))
+    draw = ImageDraw.Draw(im)
+    for y in range(H):
+        t=y/(H-1); r=int(c1[0]*(1-t)+c2[0]*t); g=int(c1[1]*(1-t)+c2[1]*t); b=int(c1[2]*(1-t)+c2[2]*t)
+        draw.line([(0,y),(W,y)], fill=(r,g,b))
+    im = im.filter(ImageFilter.GaussianBlur(6))
+    out = out_dir / f"polli_{idx:03d}_placeholder.jpg"
+    im.save(out,"JPEG",quality=90,optimize=True)
+    print(f"[PLACEHOLDER] -> {out}")
+    return out
+
+def _respect_backoff(attempt: int):
+    time.sleep(min(POLL_BACKOFF_MAX, 2 * attempt))
+
+def _fetch_pollinations(prompt: str, out_dir: Path, seen_hashes: set, idx: int) -> Path | None:
+    models_to_try = [POLLINATIONS_MODEL] + POLL_MODEL_FALLBACKS
+    base_attempts = max(6, MAX_TRIES_PER_PROMPT)
+    seed_base = POLL_FIXED_SEED if POLL_SEED_MODE == "fixed" else 1000 + idx
+    last_status = None
+
+    for attempt in range(1, base_attempts + 1):
+        model = models_to_try[(attempt - 1) % len(models_to_try)]
+        seed_now = seed_base if POLL_SEED_MODE == "fixed" else seed_base + attempt
+        urls = _pollinations_candidate_urls(prompt, seed_now, model)
+
+        for vi, base_url in enumerate(urls, start=1):
+            _respect_rate_limit()
+            try:
+                cb = int(time.time() * 1000)
+                url = f"{base_url}{'&' if '?' in base_url else '?'}cb={cb}"
+                with _session.get(
+                    url,
+                    stream=True,
+                    headers=_REQ_HEADERS,
+                    timeout=IMG_TIMEOUT_SEC,
+                    allow_redirects=True,
+                ) as r:
+                    last_status = r.status_code
+                    ctype = (r.headers.get("Content-Type") or "").lower()
+                    if r.status_code == 200 and ctype.startswith("image/"):
+                        ext = ".jpg" if ("jpeg" in ctype or "jpg" in ctype) else ".png"
+                        tmp = out_dir / f"polli_{idx:03d}_dl{ext}"
+                        with open(tmp, "wb") as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+
+                        out_path = out_dir / f"polli_{idx:03d}_{_slugify(prompt,50)}.jpg"
+
+                        # ==== nhanh: dùng PIL, không spawn ffmpeg ====
+                        try:
+                            from PIL import Image as _PILImage
+                            im = _PILImage.open(tmp).convert("RGB")
+
+                            target_w, target_h = IMG_W, IMG_H
+                            src_w, src_h = im.size
+                            src_ratio = src_w / src_h
+                            target_ratio = target_w / target_h
+
+                            # FILL: phóng để phủ hết khung
+                            if src_ratio > target_ratio:
+                                # ảnh rộng → cao = target_h, rộng theo tỉ lệ
+                                new_h = target_h
+                                new_w = int(new_h * src_ratio)
+                            else:
+                                # ảnh hẹp → rộng = target_w, cao theo tỉ lệ
+                                new_w = target_w
+                                new_h = int(new_w / src_ratio)
+
+                            im = im.resize((new_w, new_h), _PILImage.Resampling.LANCZOS)
+
+                            # crop giữa để đúng 1920x1080
+                            left = (new_w - target_w) // 2
+                            top = (new_h - target_h) // 2
+                            im = im.crop((left, top, left + target_w, top + target_h))
+
+                            im.save(out_path, "JPEG", quality=92, optimize=True)
+
+                        except Exception:
+                            # fallback cũ: ffmpeg
+                            cmd = [
+                                "ffmpeg","-y","-hide_banner","-loglevel","error",
+                                "-i", str(tmp),
+                                "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,"
+                                       "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                                "-frames:v","1","-q:v","3", str(out_path)
+                            ]
+                            subprocess.run(cmd, check=True)
+
+                        from PIL import Image as _PILImage
+                        im2 = _PILImage.open(out_path).convert("RGB")
+                        sha1 = hashlib.sha1(_image_sha1_bytes(im2, "JPEG")).hexdigest()
+                        if sha1 in seen_hashes:
+                            print(f"[INFO] Ảnh lặp (model={model}, seed={seed_now}, var={vi}) -> thử biến thể khác")
+                            tmp.unlink(missing_ok=True)
+                            _respect_backoff(attempt)
+                            continue
+
+                        seen_hashes.add(sha1)
+                        tmp.unlink(missing_ok=True)
+                        print(f"[OK] Ảnh mới -> {out_path} (model={model}, seed={seed_now}, var={vi})")
+                        return out_path
+
+                    # lỗi tạm thời → backoff nhưng ngắn lại
+                    if r.status_code >= 500:
+                        print(f"[WARN] Pollinations HTTP {r.status_code}. Backoff...")
+                        _respect_backoff(attempt)
+                        continue
+
+            except requests.RequestException as e:
+                print(f"[WARN] Pollinations error: {e}")
+                _respect_backoff(attempt)
+                continue
+
+    print(f"[ERROR] Pollinations không tạo được ảnh sau {base_attempts} lần. last_status={last_status}")
+    return None
+
+
+def _fetch_horde(prompt: str, out_dir: Path, seen_hashes: set, idx: int) -> Path | None:
+    sess = _session
+    headers = {
+        "Client-Agent": HORDE_CLIENT_AGENT,
+        "apikey": HORDE_API_KEY,
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if HORDE_API_KEY and HORDE_API_KEY != "0000000000": W,H,steps = 1024,576,28
+    else: W,H,steps = 576,320,22
+    payload = {
+        "prompt": prompt,
+        "params": {
+            "sampler_name": "k_euler", "steps": steps, "cfg_scale": 6.5,
+            "width": int(W), "height": int(H),
+            "seed": str(POLL_FIXED_SEED if POLL_SEED_MODE == "fixed" else random.randint(1, 999999)),
+            "karras": True
+        },
+        "nsfw": False, "censor_nsfw": True, "r2": False
+    }
+    submit_url = f"{HORDE_BASE}/api/v2/generate/async"
+    try:
+        resp = sess.post(submit_url, headers=headers, json=payload, timeout=30)
+    except requests.RequestException as e:
+        print(f"[WARN] Horde submit error: {e}"); return None
+    if resp.status_code >= 300:
+        print(f"[WARN] Horde submit HTTP {resp.status_code}: {resp.text[:200]}"); return None
+    job_id = (resp.json() or {}).get("id")
+    if not job_id:
+        print("[WARN] Horde no job id"); return None
+    check_url = f"{HORDE_BASE}/api/v2/generate/check/{job_id}"
+    start_ts = time.monotonic()
+    while True:
+        if time.monotonic()-start_ts > HORDE_MAX_WAIT_SEC:
+            print("[WARN] Horde timeout"); return None
+        try:
+            time.sleep(HORDE_POLL_SEC)
+            r = sess.get(check_url, headers=headers, timeout=30)
+            if r.status_code >= 300:
+                print(f"[WARN] Horde check HTTP {r.status_code}"); continue
+            data = r.json()
+        except requests.RequestException as e:
+            print(f"[WARN] Horde poll error: {e}"); continue
+        if data.get("done"):
+            gens = data.get("generations") or []
+            if not gens:
+                print("[WARN] Horde done but empty"); return None
+            b64 = gens[0].get("img")
+            if not b64:
+                print("[WARN] Horde missing img"); return None
+            try: raw = base64.b64decode(b64)
+            except Exception as e:
+                print(f"[WARN] Horde b64 decode error: {e}"); return None
+            tmp = out_dir / f"horde_{idx:03d}_dl.png"
+            with open(tmp,"wb") as f: f.write(raw)
+            out_path = out_dir / f"horde_{idx:03d}_{_slugify(prompt,50)}.jpg"
+            cmd = [
+                "ffmpeg","-y","-hide_banner","-loglevel","error",
+                "-i",str(tmp),
+                "-vf","scale=1280:720:force_original_aspect_ratio=decrease,"
+                      "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                "-frames:v","1","-q:v","3",str(out_path)
+            ]
+            try: subprocess.run(cmd, check=True)
+            except subprocess.CalledProcessError:
+                from PIL import Image as _PILImage
+                im = _PILImage.open(tmp).convert("RGB")
+                im = im.resize((IMG_W, IMG_H), _PILImage.Resampling.LANCZOS)
+                im.save(out_path,"JPEG",quality=92)
+            from PIL import Image as _PILImage
+            im2 = _PILImage.open(out_path).convert("RGB")
+            sha1 = hashlib.sha1(_image_sha1_bytes(im2,"JPEG")).hexdigest()
+            if sha1 in seen_hashes:
+                print("[INFO] Horde ảnh trùng -> bỏ"); tmp.unlink(missing_ok=True); return None
+            seen_hashes.add(sha1); tmp.unlink(missing_ok=True)
+            print(f"[OK] Horde ảnh -> {out_path}"); return out_path
+        if data.get("queue_position") is not None:
+            print(f"[INFO] Horde queue position: {data['queue_position']}")
+
+def _fetch_image(prompt: str, out_dir: Path, seen_hashes: set, idx: int) -> Path | None:
+    # Chỉ gọi Pollinations
+    p = _fetch_pollinations(prompt, out_dir, seen_hashes, idx)
+    if p:
+        return p
+
+    # Nếu tới đây là Pollinations đã thử đủ lần mà vẫn fail
+    # → hủy run, không fallback Horde, không tạo placeholder
+    raise RuntimeError(
+        "Pollinations không tạo được ảnh sau khi retry. Dừng workflow (không dùng Horde, không dùng placeholder)."
+    )
+
+# ================== PROMPT CSV ==================
+def _read_prompts_csv_any(path: Path) -> list[str]:
+    if not path.exists(): return []
+    prompts = []
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        try:
+            rdr = csv.reader(f)
+            for row in rdr:
+                if not row: continue
+                cand = None
+                for cell in reversed(row):
+                    cell = (cell or "").strip()
+                    if cell: cand = cell; break
+                if cand:
+                    if cand[0:1] in ("'",'"') and cand[-1:] == cand[0]: cand = cand[1:-1].strip()
+                    if cand: prompts.append(cand)
+        except Exception:
+            pass
+    if not prompts:
+        for line in read_lines(path):
+            prompts.append(line)
+    return prompts
+
+def _read_prompts_used(path: Path) -> set[str]:
+    return set(read_lines(path))
+
+def pick_unused_prompts(count: int) -> list[str]:
+    all_prompts = _read_prompts_csv_any(PROMPT_CSV_INPUT)
+    used = _read_prompts_used(PROMPT_CSV_DONE)
+    picked = []
+    for p in all_prompts:
+        if p not in used:
+            picked.append(p)
+            if len(picked) >= count: break
+    return picked
+
+# ================== CACHE FX 720p ==================
+def prepare_fx_cache():
+    """
+    Tạo cache 720p cho TẤT CẢ video hiệu ứng trong HIEUUNG/
+    (kể cả radio.mp4). Render chỉ dùng 1 video FX duy nhất theo thứ tự.
+    """
+    FX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _cache_one(src: Path) -> Path:
+        dst = FX_CACHE_DIR / (src.stem + ".720p.mp4")
+        if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
+            return dst
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(src),
+            "-vf", "scale=1280:720:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=1280:720",
+            "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "1200k",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            str(dst)
+        ]
+        print("[CMD]", " ".join(shlex.quote(c) for c in cmd))
+        subprocess.run(cmd, check=True)
+        print(f"[OK] Cache FX -> {dst}")
+        return dst
+
+    cached = {}
+    for p in sorted(FX_DIR.glob("*.mp4")):
+        cached[p.name] = _cache_one(p)
+    return cached
+
+def pick_single_fx_cached(cache_map: dict[str, Path]) -> Path | None:
+    """
+    Chọn 1 video hiệu ứng theo thứ tự. Ưu tiên tất cả .mp4 trừ 'radio.mp4'.
+    Nếu không có, fallback dùng 'radio.mp4' (nếu tồn tại).
+    """
+    cands = [(name, p) for name, p in cache_map.items() if name.lower() != "radio.mp4"]
+    if cands:
+        cands = sorted(cands, key=lambda x: x[0].lower())
+        total = len(cands)
+        idx = next_index(STATE_FX, total, step=1, start=1)
+        return cands[(idx - 1) % total][1]
+    # fallback: chỉ còn radio.mp4
+    r = cache_map.get("radio.mp4") or cache_map.get("radio")
+    if r: return r
+    print("[ERROR] Không tìm thấy bất kỳ video hiệu ứng nào trong HIEUUNG/.")
+    return None
+
+# NEW: Chọn FX theo bộ đếm bền vững (dựa trên tieudedalay.csv)
+def pick_fx_by_counter(cache_map: dict[str, Path], counter: int) -> Path | None:
+    # Bỏ radio.mp4 khỏi danh sách tuần tự
+    cands = [(name, p) for name, p in cache_map.items() if name.lower() != "radio.mp4"]
+    if not cands:
+        # fallback khi thật sự chỉ còn radio
+        return cache_map.get("radio.mp4") or cache_map.get("radio")
+
+    # Natural sort: "1.mp4, 2.mp4, ... 10.mp4" theo số thật, đúng ý bạn
+    def _natkey(s: str):
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', s)]
+    cands = sorted(cands, key=lambda x: _natkey(x[0]))
+
+    idx0 = counter % len(cands)   # counter 0-based
+    return cands[idx0][1]
+
+# ================== FFmpeg SLIDESHOW & RENDER ==================
+def _write_ffconcat(images: list[Path], durations: list[int], concat_path: Path):
+    """
+    Tạo file ffconcat: mỗi ảnh có 'duration N'. Ảnh cuối lặp lại 1 lần để kết thúc mượt.
+    """
+    concat_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(concat_path, "w", encoding="utf-8") as f:
+        f.write("ffconcat version 1.0\n")
+        for img, d in zip(images, durations):
+            f.write(f"file {img.as_posix()}\n")
+            f.write(f"duration {int(d)}\n")
+        f.write(f"file {images[-1].as_posix()}\n")
+        
+# tạo file slideshow.ffconcat từ danh sách ảnh, mỗi ảnh giữ 1 khoảng thời gian cố định
+def _make_slideshow_concat_file(image_paths: list[Path], fps: int) -> Path:
+    if not image_paths:
+        raise ValueError("Không có ảnh để làm slideshow")
+
+    # dùng đúng PER_IMAGE_SECONDS đang cấu hình ở trên (mặc định 300s = 5 phút/ảnh)
+    durations = [int(PER_IMAGE_SECONDS)] * len(image_paths)
+
+    concat_path = TMP_DIR / "slideshow.ffconcat"
+    _write_ffconcat(image_paths, durations, concat_path)
+    return concat_path
+        
+def _prekey_fx_to_alpha(fx_src: Path, duration_sec: float, out_path: Path) -> Path | None:
+    """
+    Bước 1: lấy video FX nền xanh -> cắt NGẮN (vd 120s) -> key sang video có alpha.
+    Làm 1 lần, để bước render cuối không phải chạy chromakey nữa.
+    Xuất ra .mov (qtrle) vì ffmpeg trên runner đọc được và giữ alpha dễ.
+    """
+    if duration_sec <= 0:
+        print("[ERROR] _prekey_fx_to_alpha: duration_sec <= 0")
+        return None
+
+    # chỉ pre-key 120s (hoặc đổi qua env)
+    PREKEY_DURATION_SEC = float(os.getenv("PREKEY_DURATION_SEC", "120"))
+
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-stream_loop", "-1",                         # lặp FX gốc nếu nó ngắn
+        "-i", str(fx_src),
+        "-t", str(PREKEY_DURATION_SEC),               # <<< CHỈ key 120s, KHÔNG phải 9 tiếng
+        "-vf", f"fps={OUT_FPS},scale=1280:720:flags=fast_bilinear,format=rgba,chromakey=green:0.14:0.0",
+        "-c:v", "qtrle",
+        "-an",
+        str(out_path),                                # <<< CHỖ NÀY BỊ SAI TRƯỚC ĐÓ (prekey_path) → SỬA THÀNH out_path
+    ]
+
+    print("[CMD][prekey]", " ".join(shlex.quote(c) for c in cmd))
+    try:
+        subprocess.run(cmd, check=True)
+        print(f"[OK] Pre-key FX -> {out_path}")
+        return out_path
+    except subprocess.CalledProcessError:
+        print("[ERROR] Pre-key FX thất bại.")
+        return None
+
+def render_video_with_audio_ffmpeg(image_paths: list[Path],
+                                   fx_one_path: Path,
+                                   audio_path: Path,
+                                   out_path: Path,
+                                   srt_path: Path | None = None) -> Path | None:
+    """
+    2-pass:
+    - pass 1: FX xanh -> FX alpha (qtrle) NGẮN (120s)
+    - pass 2: slideshow + FX alpha (LOOP) + (sub) + audio → encode 9 tiếng
+    """
+    if not fx_one_path or not Path(fx_one_path).exists():
+        print("[ERROR] Không có video hiệu ứng hợp lệ."); return None
+
+    # 0) lấy độ dài audio để biết video cuối dài bao nhiêu
+    audio_sec = _probe_duration_seconds_with_ffmpeg(audio_path)
+    if audio_sec <= 0:
+        print("[ERROR] Không đo được thời lượng audio -> dừng."); return None
+
+    # 1) làm slideshow từ image_paths → concat file
+    concat_file = _make_slideshow_concat_file(image_paths, OUT_FPS)
+    if not concat_file or not concat_file.exists():
+        print("[ERROR] Không tạo được file concat slideshow."); return None
+
+    # 2) pass 1: pre-key (đã sửa ở hàm trên)
+    fx_alpha_path = TMP_DIR / "fx.alpha.mov"
+    fx_alpha_path = _prekey_fx_to_alpha(fx_one_path, audio_sec, fx_alpha_path)
+    if not fx_alpha_path or not fx_alpha_path.exists():
+        print("[ERROR] Không tạo được FX alpha -> dừng.")
+        return None
+
+    # 3) filter graph: overlay FX alpha + (nếu có) hardsub
+    if srt_path and Path(srt_path).exists():
+        srt_esc = _ffmpeg_escape_path(Path(srt_path))
+        filter_graph = (
+            # ép slideshow FILL 1920x1080 rồi mới overlay
+            f"[0:v]fps={OUT_FPS},"
+            f"scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,"
+            f"crop={OUT_W}:{OUT_H},format=yuv420p[bg];"
+            f"[1:v]fps={OUT_FPS},format=yuva420p[fx];"
+            f"[bg][fx]overlay=shortest=1[tmpv];"
+            f"[tmpv]subtitles='{srt_esc}':"
+            f"force_style='FontName=DejaVu Sans,Fontsize=20,PrimaryColour=&H0000FFFF&,"
+            f"WrapStyle=2,MarginL=80,MarginR=80,OutlineColour=&H00000000&,"
+            f"BorderStyle=1,Outline=2,Shadow=0,Alignment=2,MarginV=40'[outv]"
+        )
+    else:
+        filter_graph = (
+            f"[0:v]fps={OUT_FPS},"
+            f"scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,"
+            f"crop={OUT_W}:{OUT_H},format=yuv420p[bg];"
+            f"[1:v]fps={OUT_FPS},format=yuva420p[fx];"
+            f"[bg][fx]overlay=shortest=1[outv]"
+        )
+
+
+    # 4) pass 2: RENDER CUỐI
+    cmd2 = [
+        "ffmpeg","-y","-hide_banner","-loglevel","error",
+        "-safe","0","-f","concat","-i", str(concat_file),   # [0] slideshow
+        "-stream_loop","-1","-i", str(fx_alpha_path),       # <<< CHÈN 2 THAM SỐ NÀY ĐỂ LOOP ALPHA 120s → 9 TIẾNG
+        "-i", str(audio_path),                              # [2] audio
+        "-filter_complex", filter_graph,
+        "-filter_threads","2",
+        "-map","[outv]","-map","2:a:0",
+        "-c:v","libx264","-preset","ultrafast","-b:v","1200k",
+        "-pix_fmt","yuv420p","-r", str(OUT_FPS),
+        "-c:a","aac","-b:a","128k",
+        "-shortest", str(out_path)
+    ]
+
+    print("[CMD][render]", " ".join(shlex.quote(c) for c in cmd2))
+    try:
+        subprocess.run(cmd2, check=True)
+        print(f"[OK] Video cuối cùng (2-pass, FX alpha) -> {out_path}")
+        return out_path
+    except subprocess.CalledProcessError:
+        print("[ERROR] Render FFmpeg thất bại.")
+        return None
+
+
+# ================== YOUTUBE (tùy chọn) ==================
+def get_youtube():
+    if not (YT_CLIENT_ID and YT_CLIENT_SECRET and YT_REFRESH_TOKEN):
+        print("[WARN] Thiếu YT_CLIENT_* hoặc REFRESH_TOKEN -> bỏ qua upload.")
+        return None
+    try:
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+    except Exception as e:
+        print("[ERROR] Thiếu thư viện Google API:", e)
+        return None
+    creds = Credentials(
+        token=None, refresh_token=YT_REFRESH_TOKEN,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=YT_CLIENT_ID, client_secret=YT_CLIENT_SECRET,
+        scopes=["https://www.googleapis.com/auth/youtube.upload"],
+    )
+    try:
+        return build("youtube","v3",credentials=creds, cache_discovery=False)
+    except Exception as e:
+        print("[ERROR] build youtube service:", e)
+        return None
+
+def upload_video(youtube, file_path: Path, title: str, description: str, tags_csv: str):
+    if youtube is None:
+        print("[DRY-RUN] Upload bỏ qua. Title:", title)
+        return None
+    try:
+        from googleapiclient.http import MediaFileUpload
+    except Exception as e:
+        print("[ERROR] Thiếu MediaFileUpload:", e); return None
+    tags = [t.strip() for t in (tags_csv or "").split(",") if t.strip()]
+    body = {
+        "snippet": {"title": (title or file_path.stem)[:100], "description": description or "", "tags": tags, "categoryId":"22"},
+        "status": {"privacyStatus": YOUTUBE_PRIVACY, "selfDeclaredMadeForKids": False},
+    }
+    media = MediaFileUpload(str(file_path), chunksize=-1, resumable=True)
+    try:
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+        response = None
+        while response is None:
+            status, response = request.next_chunk()
+            if status: print(f"Upload {int(status.progress()*100)}%")
+        vid = response.get("id"); print("[OK] Upload xong. Video ID:", vid)
+        return vid
+    except Exception as e:
+        print("[ERROR] Upload YouTube:", e)
+        return None
+
+def set_thumbnail(youtube, video_id: str, thumb_path: Path) -> bool:
+    if youtube is None or not video_id or not Path(thumb_path).exists():
+        print("[WARN] Thumbnail skipped.")
+        return False
+    try:
+        from googleapiclient.http import MediaFileUpload
+        req = youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(str(thumb_path), mimetype="image/jpeg"))
+        req.execute(); print("[OK] Thumbnail set.")
+        return True
+    except Exception as e:
+        print("[ERROR] Set thumbnail:", e); return False
+
+# ================== MAIN ==================
+def main():
+    FINAL_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    TMP_DIR.mkdir(exist_ok=True)
+    ensure_ffmpeg()
+
+    # Đọc toàn bộ tiêu đề (dùng cho DEBUG / backup, nhưng lấy tiêu đề theo state)
+    titles = read_lines(CSV_INPUT)
+    if not titles:
+        print("[INFO] tieude.csv trống hoặc không tồn tại.")
+        return
+
+    # vẫn đọc tieudedalay.csv để tận dụng làm bộ đếm FX nếu bạn đã dùng trước đây
+    done_titles = set(read_lines(CSV_DONE))
+    base_counter = len(done_titles)
+
+    # THEO YÊU CẦU: mỗi lần run chỉ xử lý 1 tiêu đề duy nhất,
+    # lấy theo thứ tự và quay lại như thumb
+    picked_title = pick_title_in_order()
+    if picked_title is None:
+        print("[INFO] Không lấy được tiêu đề hợp lệ từ tieude.csv")
+        return
+
+    picked_titles = [picked_title]
+    processed_titles_ok = []
+
+
+
+    description_content = ""
+    if DESCRIPTION_FILE.exists():
+        with DESCRIPTION_FILE.open("r", encoding="utf-8") as f:
+            description_content = f.read()
+        print(f"[INFO] Đã đọc mô tả từ {DESCRIPTION_FILE}")
+    else:
+        print(f"[WARN] Không thấy {DESCRIPTION_FILE}, dùng mô tả trống.")
+
+    # Cache FX 720p (cho tất cả .mp4)
+    fx_cache_map = prepare_fx_cache()
+
+    yt_client = get_youtube()
+
+    # Duyệt có chỉ số để mỗi video lấy 1 FX tiếp theo (1→28 rồi quay vòng)
+    for i, title in enumerate(picked_titles, start=1):
+        print("\n" + "="*20 + f" PROCESSING: {title} " + "="*20)
+        safe_title = sanitize_for_path(title)
+        final_thumb_path = FINAL_OUT_DIR / f"{safe_title}.jpg"
+        final_video_path = FINAL_OUT_DIR / f"{safe_title}.mp4"
+
+        audio_file_path = None
+        generated_image_paths = []
+        used_prompts_for_this_video = []
+
+        # CHỌN FX THEO THỨ TỰ TÊN FILE (bỏ radio.mp4), quay vòng
+        fx_one = pick_fx_by_counter(
+            fx_cache_map,
+            counter=base_counter + i - 1
+        )
+
+
+        try:
+            # Ép index background ổn định theo tổng tiêu đề đã làm (đếm từ tieudedalay.csv)
+            bg_idx = ((base_counter + i - 1) % N_BACKGROUNDS) + 1
+            try:
+                STATE_BG.write_text(str(bg_idx))  # load_background() sẽ đọc 'bg_idx' và tự tăng sau khi dùng
+            except Exception as e:
+                print(f"[WARN] Không ghi được STATE_BG: {e}")
+
+            # 1) Thumbnail: dùng ảnh có sẵn trong thư mục thumbs thay vì layouts.render
+            thumb_src = pick_thumb_path()
+            if not thumb_src:
+                raise RuntimeError("Không tìm được thumbnail trong thư mục 'thumbs'.")
+
+            from PIL import Image as _PILImage
+            im_thumb = _PILImage.open(thumb_src).convert("RGB")
+            # Dùng luôn kích thước Pollinations (IMG_W x IMG_H, thường là 1920x1080)
+            im_thumb = im_thumb.resize((IMG_W, IMG_H), _PILImage.Resampling.LANCZOS)
+            im_thumb.save(final_thumb_path, "JPEG", quality=92, subsampling=1)
+            print(f"[OK] Thumbnail từ thumbs/{thumb_src.name} -> {final_thumb_path}")
+
+            # 2) Audio
+            audio_link = pick_unused_link()
+            if not audio_link: raise RuntimeError("Đã hết audio link trong links.csv.")
+            audio_file_path = download_gdrive_audio(audio_link, TMP_DIR)
+            if not audio_file_path: raise RuntimeError(f"Không tải được audio: {audio_link}")
+            audio_file_path = trim_audio_if_long(audio_file_path, TMP_DIR)
+            audio_file_path = enhance_audio_for_speech(audio_file_path, TMP_DIR)
+            # >>> THÊM BƯỚC NÀY: mix tiếng mưa rain.* trong thư mục audio/ <<<
+            audio_file_path = mix_with_rain_bgm(audio_file_path, TMP_DIR)
+            srt_path = transcribe_to_srt(Path(audio_file_path), TMP_DIR)
+
+            audio_sec = _probe_duration_seconds_with_ffmpeg(audio_file_path)
+            if audio_sec <= 0: raise RuntimeError("Không đo được thời lượng audio.")
+            n_images = max(1, math.ceil(audio_sec / PER_IMAGE_SECONDS))
+            print(f"[INFO] Audio = {audio_sec:.0f}s -> cần {n_images} ảnh (3 phút/ảnh).")
+
+            # 3) Prompts
+            prompts = pick_unused_prompts(n_images)
+            if len(prompts) < n_images:
+                print(f"[WARN] prompt.csv không đủ prompt chưa dùng. Cần {n_images}, có {len(prompts)}.")
+            if not prompts: raise RuntimeError("Không có prompt để tạo ảnh.")
+
+            # 4) Tạo ảnh (song song 3 ảnh / mỗi lượt)
+            seen_hashes = set()
+            need = n_images
+            idx = 1
+            generated_image_paths = []
+            used_prompts_for_this_video = []
+
+            # tải theo lô 3 prompt một
+            for start in range(0, len(prompts), 3):
+                if len(generated_image_paths) >= need:
+                    break
+
+                batch = prompts[start:start+3]
+
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+                    futures = []
+                    for p in batch:
+                        if len(generated_image_paths) >= need:
+                            break
+                        cur_idx = idx
+                        idx += 1
+                        futures.append((p, ex.submit(_fetch_image, p, TMP_DIR, seen_hashes, cur_idx)))
+
+                    for p, fut in futures:
+                        out = fut.result()
+                        if out is not None and len(generated_image_paths) < need:
+                            generated_image_paths.append(out)
+                            used_prompts_for_this_video.append(p)
+                        elif out is None:
+                            print(f"[WARN] Bỏ prompt do tạo ảnh thất bại: {p}")
+
+            # vét thêm nếu thiếu (giữ nguyên logic cũ)
+            if len(generated_image_paths) < need:
+                rest = need - len(generated_image_paths)
+                print(f"[INFO] Thiếu {rest} ảnh -> vét thêm trong prompt.csv.")
+                all_prompts = _read_prompts_csv_any(PROMPT_CSV_INPUT)
+                used_all = _read_prompts_used(PROMPT_CSV_DONE) | set(used_prompts_for_this_video)
+                for p in all_prompts:
+                    if p in used_all:
+                        continue
+                    cur_idx = idx
+                    idx += 1
+                    out = _fetch_image(p, TMP_DIR, seen_hashes, cur_idx)
+                    if out is not None:
+                        generated_image_paths.append(out)
+                        used_prompts_for_this_video.append(p)
+                    if len(generated_image_paths) >= need:
+                        break
+
+            if len(generated_image_paths) < need:
+                raise RuntimeError(f"Không đủ ảnh (có {len(generated_image_paths)}/{need}).")
+
+
+    
+
+            # 6) Render video (1 FX duy nhất)
+            if not render_video_with_audio_ffmpeg(generated_image_paths, fx_one, audio_file_path, final_video_path, srt_path):
+                raise RuntimeError("Render FFmpeg thất bại.")
+
+            # 7) Ghi nhận đã dùng
+            append_lines(LINKS_CSV_DONE, [audio_link])
+            append_lines(PROMPT_CSV_DONE, used_prompts_for_this_video)
+            processed_titles_ok.append(title)
+            print(f"[SUCCESS] Xong '{title}' | Audio -> links_done.csv | Prompts -> promptdalay.csv")
+
+            # 8) Upload (tuỳ chọn)
+            vid = upload_video(yt_client, final_video_path, title, description_content, "")
+            if vid: set_thumbnail(yt_client, vid, final_thumb_path)
+
+        except Exception as e:
+            print(f"[FAIL] Lỗi khi xử lý '{title}': {e}")
+            print(">>> Bỏ qua và tiếp tục tiêu đề kế tiếp.")
+            if final_thumb_path.exists(): final_thumb_path.unlink(missing_ok=True)
+            if final_video_path.exists(): final_video_path.unlink(missing_ok=True)
+        finally:
+            # Dọn tạm
+            if audio_file_path and audio_file_path.exists(): audio_file_path.unlink(missing_ok=True)
+            for p in generated_image_paths:
+                try:
+                    if p and Path(p).exists(): Path(p).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            try:
+                nd = TMP_DIR / "norm"
+                if nd.exists(): shutil.rmtree(nd, ignore_errors=True)
+                cf = TMP_DIR / "slideshow.ffconcat"
+                if cf.exists(): cf.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    if processed_titles_ok:
+        print(f"\n[INFO] Đã xử lý {len(processed_titles_ok)} tiêu đề (không cập nhật tieudedalay.csv theo yêu cầu).")
+
+
+    # Dọn thư mục tạm nếu trống
+    if os.path.exists(TMP_DIR):
+        try:
+            if not any(Path(TMP_DIR).iterdir()):
+                shutil.rmtree(TMP_DIR, ignore_errors=True)
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    main()

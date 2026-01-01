@@ -161,10 +161,6 @@ jobs:
           # Whisper (gói đúng tên: openai-whisper)
           python -m pip install "openai-whisper==20231117"
           
-
-          # loc banner qr
-          python -m pip install opencv-python-headless
-
           # (tuỳ chọn) test import cho chắc
           python -c "from inaSpeechSegmenter import Segmenter; print('inaSpeechSegmenter OK')"
 

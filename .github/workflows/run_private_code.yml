@@ -25,7 +25,7 @@ jobs:
       IMG_PROVIDER: cloudflare
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
       CF_API_TOKEN:  ${{ secrets.CF_API_TOKEN }}
-      CF_MODEL: "@cf/bytedance/stable-diffusion-xl-lightning"
+      CF_MODEL: "@cf/black-forest-labs/flux-1-schnell"
       CF_STEPS: "8"
 
   

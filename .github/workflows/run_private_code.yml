@@ -161,8 +161,6 @@ jobs:
           # Whisper (gói đúng tên: openai-whisper)
           python -m pip install "openai-whisper==20231117"
           
-          # (tuỳ chọn) test import cho chắc
-          python -c "from inaSpeechSegmenter import Segmenter; print('inaSpeechSegmenter OK')"
 
           # Kiểm tra import (dùng python -c để tránh lỗi YAML here-doc)
           python -c "import sys; import whisper, torch, torchaudio; print('Whisper/Torch OK:', whisper.__version__, torch.__version__)"

@@ -28,7 +28,8 @@ jobs:
       CF_MODEL: "@cf/black-forest-labs/flux-1-schnell"
       CF_STEPS: "4"
 
-
+      POLL_TOKEN: ${{ secrets.POLL_TOKEN }}
+      
     steps:
       - name: Checkout wrapper (repo PUBLIC)
         uses: actions/checkout@v4
@@ -171,6 +172,7 @@ jobs:
 
           # Kiểm tra import (dùng python -c để tránh lỗi YAML here-doc)
           python -c "import sys; import whisper, torch, torchaudio; print('Whisper/Torch OK:', whisper.__version__, torch.__version__)"
+          python -c "import os; print('POLL_TOKEN set:', bool(os.getenv('POLL_TOKEN')))"
           
       - name: Install Python deps
         run: |

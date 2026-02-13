@@ -28,6 +28,7 @@ jobs:
       CF_MODEL: "@cf/black-forest-labs/flux-1-schnell"
       CF_STEPS: "8"
 
+      THUMB_FONT_FILE: Impact.ttf
 
     steps:
       - name: Checkout wrapper (repo PUBLIC)

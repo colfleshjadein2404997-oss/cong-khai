@@ -1,10 +1,7 @@
 name: run-private-code
 
 on:
-  
-      
   workflow_dispatch: {}
-
 
 jobs:
   run-private:
@@ -65,7 +62,6 @@ jobs:
 
       - name: Export resolved privacy to env
         run: echo "YOUTUBE_PRIVACY=${{ steps.params.outputs.privacy }}" >> "$GITHUB_ENV"
-
 
       # KÉO CODE từ repo PRIVATE (PAT)
       - name: Checkout PRIVATE via PAT
@@ -141,7 +137,6 @@ jobs:
           fi
           echo "[OK] YT secrets đầy đủ."
 
-
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -159,9 +154,10 @@ jobs:
           key: ${{ runner.os }}-pip-${{ hashFiles('private-src/**/requirements*.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
+
       - name: Install Python libs
         run: |
-          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --upgrade pip wheel "setuptools<81"
           # Libs ảnh / video phụ trợ
           python -m pip install pillow opencv-python-headless numpy gdown imageio-ffmpeg
           # Google API (nếu upload YouTube)
@@ -174,7 +170,6 @@ jobs:
           # YAMNet (TensorFlow) để lọc nhạc
           python -m pip install tensorflow-cpu tensorflow-hub
 
-
           # loc banner qr
           python -m pip install opencv-python-headless
           # Kiểm tra import (dùng python -c để tránh lỗi YAML here-doc)
@@ -183,7 +178,7 @@ jobs:
       - name: Install Python deps
         run: |
           set -e
-          python -m pip install --upgrade setuptools
+          python -m pip install --upgrade "setuptools<81"
           REQ=$(ls private-src/**/requirements*.txt 2>/dev/null | head -n1 || true)
           if [ -n "$REQ" ]; then
             echo "[INFO] Using requirements: $REQ"
@@ -194,6 +189,7 @@ jobs:
                         google-api-python-client google-auth google-auth-httplib2 \
                         imageio-ffmpeg tensorflow-cpu tensorflow-hub
           fi
+          python -m pip install --upgrade "setuptools<81"
 
       # CHẠY CODE trong repo PRIVATE (upload YouTube trực tiếp)
       - name: Run pipeline in PRIVATE

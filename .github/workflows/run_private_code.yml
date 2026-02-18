@@ -1,6 +1,9 @@
 name: run-private-code
 
 on:
+  schedule:
+    - cron: '0 3 * * *'   # 11:00 VN (LƯU Ý: GitHub cron chạy theo UTC)
+    - cron: '0 9 * * *'   # 13:00 VN (LƯU Ý: GitHub cron chạy theo UTC)
   workflow_dispatch: {}
 
 jobs:
@@ -29,8 +32,6 @@ jobs:
       CF_API_TOKEN:  ${{ secrets.CF_API_TOKEN }}
       CF_MODEL: "@cf/black-forest-labs/flux-1-schnell"
       CF_STEPS: "8"
-
-      THUMB_FONT_FILE: UTM-Impact.ttf
 
     steps:
       - name: Checkout wrapper (repo PUBLIC)
@@ -164,18 +165,16 @@ jobs:
           python -m pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
           # Torch CPU + Torchaudio (đúng index CPU)
           python -m pip install "torch==2.3.1" "torchaudio==2.3.1" --index-url https://download.pytorch.org/whl/cpu
-
           # Whisper (gói đúng tên: openai-whisper)
           python -m pip install "openai-whisper==20231117"
-          python -c "import whisper; from whisper.utils import get_writer; print('Whisper import OK')"
 
           # YAMNet (TensorFlow) để lọc nhạc
           python -m pip install tensorflow-cpu tensorflow-hub
 
-          # loc banner qr
+          # loc banner qr (giữ như bạn)
           python -m pip install opencv-python-headless
 
-          python -c "import whisper, torch, torchaudio; print('Whisper/Torch OK:', getattr(whisper,'__version__','?'), torch.__version__)"
+          python -c "import whisper, torch, torchaudio; print('Whisper/Torch OK:', whisper.__version__, torch.__version__)"
 
       - name: Install Python deps
         run: |
@@ -195,20 +194,11 @@ jobs:
           python -m pip install --force-reinstall --no-deps "setuptools==80.9.0"
           python -c "import setuptools, pkg_resources; print('FINAL setuptools=', setuptools.__version__, 'pkg_resources OK')"
 
-          # CHỐT LẠI openai-whisper sau khi cài requirements (tránh bị gỡ/ghi đè)
-          python -m pip uninstall -y whisper || true
-          python -m pip install --upgrade --force-reinstall "openai-whisper==20231117"
-          python -c "import whisper; from whisper.utils import get_writer; print('FINAL Whisper OK')"
-
       # QUAN TRỌNG: chốt lần cuối ngay trước khi chạy pipeline (để hết kiểu lúc được lúc không)
-      - name: Ensure pkg_resources & whisper before running
+      - name: Ensure pkg_resources before running
         run: |
           python -m pip install --force-reinstall --no-deps "setuptools==80.9.0"
           python -c "import pkg_resources; print('pkg_resources OK')"
-
-          python -m pip uninstall -y whisper || true
-          python -m pip install --upgrade --force-reinstall "openai-whisper==20231117"
-          python -c "import whisper; from whisper.utils import get_writer; print('Whisper OK')"
 
       - name: Run pipeline in PRIVATE
         working-directory: ${{ steps.find_script.outputs.dir }}

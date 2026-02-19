@@ -35,7 +35,7 @@ jobs:
 
       THUMB_FONT_FILE: UTM-Impact.ttf
 
-      SUB_FONT_NAME: "UTM Impact"   # nếu font family của bạn là UTM Impact
+      SUB_FONT_NAME: "FC The Bold Font"   # nếu font family của bạn là UTM Impact
       # hoặc dùng "Impact" nếu đúng tên family là Impact
 
       SUB_FONT_SIZE: "56"

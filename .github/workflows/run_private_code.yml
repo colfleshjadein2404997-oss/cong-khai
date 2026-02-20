@@ -33,7 +33,7 @@ jobs:
 
       THUMB_FONT_FILE: UTM-Impact.ttf
 
-      SUB_HI_SCALE: "125"
+      SUB_HI_SCALE: "150"
 
 
       SUB_FONT_NAME: "FC The Bold Font"   # nếu font family của bạn là UTM Impact

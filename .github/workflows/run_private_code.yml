@@ -1,9 +1,7 @@
 name: run-private-code
 
 on:
-  schedule:
-    - cron: '0 3 * * *'   # 11:00 VN (LƯU Ý: GitHub cron chạy theo UTC)
-    - cron: '0 9 * * *'   # 13:00 VN (LƯU Ý: GitHub cron chạy theo UTC)
+  
   workflow_dispatch: {}
 
 jobs:
@@ -34,6 +32,9 @@ jobs:
       CF_STEPS: "8"
 
       THUMB_FONT_FILE: UTM-Impact.ttf
+
+      SUB_HI_SCALE: "125"
+
 
       SUB_FONT_NAME: "FC The Bold Font"   # nếu font family của bạn là UTM Impact
       # hoặc dùng "Impact" nếu đúng tên family là Impact

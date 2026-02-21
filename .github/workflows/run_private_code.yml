@@ -55,6 +55,15 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Inspect font family
+        working-directory: ${{ steps.find_script.outputs.dir }}
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y fontconfig
+          fc-scan fonts/FC-The-Bold-Font.otf | head -n 40
+
+
       - name: Determine auth mode
         id: auth
         env:
@@ -217,6 +226,14 @@ jobs:
         run: |
           python -m pip install --force-reinstall --no-deps "setuptools==80.9.0"
           python -c "import pkg_resources; print('pkg_resources OK')"
+
+      - name: Prepare subtitle fonts
+        working-directory: ${{ steps.find_script.outputs.dir }}
+        run: |
+          set -e
+          mkdir -p fonts
+          cp -v assets/fonts/FC-The-Bold-Font.otf fonts/
+          ls -la fonts
 
       - name: Run pipeline in PRIVATE
         working-directory: ${{ steps.find_script.outputs.dir }}

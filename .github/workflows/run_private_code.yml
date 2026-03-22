@@ -29,8 +29,8 @@ jobs:
       IMG_PROVIDER: cloudflare
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
       CF_API_TOKEN:  ${{ secrets.CF_API_TOKEN }}
-      CF_MODEL: "@cf/stabilityai/stable-diffusion-xl-base-1.0"
-      CF_STEPS: "20"
+      CF_MODEL: "@cf/black-forest-labs/flux-1-schnell"
+      CF_STEPS: "2"
 
     steps:
       - name: Checkout wrapper (repo PUBLIC)

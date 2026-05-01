@@ -216,10 +216,10 @@ jobs:
           # Re-pin lại backend build (tránh requirements kéo lệch)
           python -m pip install --force-reinstall "setuptools==69.5.1" "wheel==0.43.0"
           python -c "import pkg_resources; print('pkg_resources still OK')"
-
+        
           # Cài whisper KHÔNG build isolation
           python -m pip install --no-build-isolation --no-cache-dir "openai-whisper==20231117"
-
+          python -m pip install -U faster-whisper
           # Verify
           python -c "import whisper, torch, torchaudio, numpy, cv2, pkg_resources; print('ALL OK:', whisper.__version__, torch.__version__)"
           python -m pip check || true

@@ -32,7 +32,7 @@ jobs:
       CF_MODEL: "@cf/black-forest-labs/flux-1-schnell"
       CF_STEPS: "8"
 
-      LOOP_VIDEO_BITRATE: "450k"
+      LOOP_VIDEO_BITRATE: "650k"
 
     steps:
       - name: Checkout wrapper (repo PUBLIC)

@@ -63,6 +63,10 @@ jobs:
       BLACK_KEY_SIMILARITY: "0.32"
       BLACK_KEY_BLEND: "0.12"
 
+
+      SUB_MODE: "first"
+      SUB_DURATION_SEC: "3600"
+
     steps:
       - name: Checkout wrapper (repo PUBLIC)
         uses: actions/checkout@v4

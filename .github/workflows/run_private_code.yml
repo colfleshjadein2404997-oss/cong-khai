@@ -57,8 +57,8 @@ jobs:
       SUB_POS_X: "640"
       SUB_POS_Y: "600"
       
-      WHISPER_LANGUAGE: "vi"
-      WHISPER_LANG: "vi"
+      WHISPER_LANGUAGE: "en"
+      WHISPER_LANG: "en"
 
       BLACK_KEY_SIMILARITY: "0.32"
       BLACK_KEY_BLEND: "0.12"

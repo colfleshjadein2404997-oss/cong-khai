@@ -63,7 +63,7 @@ jobs:
       BLACK_KEY_SIMILARITY: "0.32"
       BLACK_KEY_BLEND: "0.12"
 
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
       SUB_MODE: "first"
       SUB_DURATION_SEC: "10000"
 

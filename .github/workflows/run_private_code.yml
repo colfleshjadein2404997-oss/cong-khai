@@ -228,6 +228,9 @@ jobs:
           # Torch CPU + torchaudio
           python -m pip install "torch==2.3.1" "torchaudio==2.3.1" --index-url https://download.pytorch.org/whl/cpu
 
+          # Demucs vocal separation
+          python -m pip install demucs
+          
           # Re-pin lại backend build (tránh requirements kéo lệch)
           python -m pip install --force-reinstall "setuptools==69.5.1" "wheel==0.43.0"
           python -c "import pkg_resources; print('pkg_resources still OK')"
